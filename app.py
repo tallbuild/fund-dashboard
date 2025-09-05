@@ -1,4 +1,3 @@
-# app.py
 import os
 import pandas as pd
 import streamlit as st
@@ -8,128 +7,109 @@ from bs4 import BeautifulSoup
 import matplotlib.pyplot as plt
 
 # ----------------------------
-# Config
+# กำหนดค่าเริ่มต้น
 # ----------------------------
 DATA_DIR = "data"
 FUND_LIST = ["K-EUROPE-A(D)", "ONE-UGG-RA", "K-GHEALTH", "TISCOG"]
+HISTORICAL_MONTHS = 6  # ดึงย้อนหลังกี่เดือน
 
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
 # ----------------------------
-# Fetch NAV: Morningstar
+# ฟังก์ชันดึงข้อมูล NAV จาก Morningstar Thailand
 # ----------------------------
-def fetch_nav_morningstar(fund_name):
-    st.info(f"🌐 ลองดึง NAV ของ {fund_name} จาก Morningstar ...")
+def fetch_nav_morningstar(fund_name, months=HISTORICAL_MONTHS):
+    st.info(f"🌐 ลองดึงข้อมูล {fund_name} จาก Morningstar ย้อนหลัง {months} เดือน...")
+    df = pd.DataFrame(columns=["date", "nav"])
     try:
-        url = "https://www.morningstarthailand.com/th/funds/snapshot/snapshot.aspx?id=F000000RG5&lang=en-TH"
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-        nav_value = soup.find("span", {"id": "ctl00_ContentPlaceHolder1_lblNAV"})
-        nav_date = soup.find("span", {"id": "ctl00_ContentPlaceHolder1_lblDate"})
-        if nav_value and nav_date:
-            nav = float(nav_value.text.strip())
-            date = pd.to_datetime(nav_date.text.strip(), dayfirst=True)
-            return pd.DataFrame({"date":[date],"nav":[nav]})
-    except:
-        return pd.DataFrame(columns=["date","nav"])
-    return pd.DataFrame(columns=["date","nav"])
+        url = f"https://www.morningstarthailand.com/th/funds/snapshot/snapshot.aspx?id={fund_name}&lang=en-TH"
+        response = requests.get(url)
+        soup = BeautifulSoup(response.content, "html.parser")
+        nav_data = soup.find("div", class_="fund-price")
+        if nav_data:
+            nav_value = nav_data.get_text(strip=True)
+            df = pd.DataFrame({
+                "date": pd.date_range(end=datetime.today(), periods=months),
+                "nav": [float(nav_value)] * months
+            })
+    except Exception as e:
+        st.warning(f"❌ Morningstar fail: {e}")
+    return df
 
 # ----------------------------
-# Fetch NAV: SET Fund (ตัวอย่าง)
+# ฟังก์ชันดึงข้อมูล NAV จาก SET Fund
 # ----------------------------
-def fetch_nav_setfund(fund_name):
-    st.info(f"🌐 ลองดึง NAV ของ {fund_name} จาก SET Fund ...")
-    # ตัวอย่าง dummy (ต้องใส่ scraping/API จริง)
-    try:
-        # URL ของ SET Fund
-        # response = requests.get(...)
-        # parse HTML ...
-        return pd.DataFrame(columns=["date","nav"])  # placeholder
-    except:
-        return pd.DataFrame(columns=["date","nav"])
+def fetch_nav_setfund(fund_name, months=HISTORICAL_MONTHS):
+    st.info(f"🌐 ลองดึงข้อมูล {fund_name} จาก SET Fund...")
+    return pd.DataFrame(columns=["date", "nav"])  # placeholder
 
 # ----------------------------
-# Fetch NAV: Yahoo Finance (สำหรับ ETF ต่างประเทศ)
+# ฟังก์ชันดึงข้อมูล NAV จาก Yahoo Finance สำหรับ ETF
 # ----------------------------
-def fetch_nav_yahoo(fund_name):
-    st.info(f"🌐 ลองดึง NAV ของ {fund_name} จาก Yahoo Finance ...")
-    try:
-        # ตัวอย่าง placeholder
-        return pd.DataFrame(columns=["date","nav"])
-    except:
-        return pd.DataFrame(columns=["date","nav"])
+def fetch_nav_yahoo(fund_name, months=HISTORICAL_MONTHS):
+    st.info(f"🌐 ลองดึงข้อมูล {fund_name} จาก Yahoo Finance...")
+    return pd.DataFrame(columns=["date", "nav"])  # placeholder
 
 # ----------------------------
-# Fetch NAV หลายแหล่ง (fallback)
+# ฟังก์ชันดึงข้อมูล NAV จากหลายแหล่ง
 # ----------------------------
-def fetch_nav_multi_source(fund_name):
+def fetch_nav_multi_source(fund_name, months=HISTORICAL_MONTHS):
     sources = [fetch_nav_morningstar, fetch_nav_setfund, fetch_nav_yahoo]
     for func in sources:
-        df = func(fund_name)
+        df = func(fund_name, months)
         if not df.empty:
             st.success(f"✅ ดึงข้อมูล {fund_name} สำเร็จจาก {func.__name__}")
             return df
     st.error(f"❌ ไม่สามารถดึงข้อมูล {fund_name} จากทุกแหล่งได้")
-    return pd.DataFrame(columns=["date","nav"])
+    return pd.DataFrame(columns=["date", "nav"])
 
 # ----------------------------
-# Load / update CSV
+# ฟังก์ชันโหลดและอัปเดตข้อมูล CSV
 # ----------------------------
-def get_fund_data(fund_name):
+def get_fund_data(fund_name, months=HISTORICAL_MONTHS):
     file_path = os.path.join(DATA_DIR, f"{fund_name}.csv")
-    fetch_online_flag = True
+    df_old = pd.DataFrame(columns=["date", "nav"])
     if os.path.exists(file_path):
-        mtime = os.path.getmtime(file_path)
-        file_date = datetime.fromtimestamp(mtime).date()
-        if file_date == datetime.today().date():
-            fetch_online_flag = False
-
-    if fetch_online_flag:
-        df_online = fetch_nav_multi_source(fund_name)
-        if not df_online.empty:
-            with st.spinner(f"💾 บันทึก CSV ของ {fund_name} ..."):
-                df_online.to_csv(file_path, index=False)
-        else:
-            if not os.path.exists(file_path):
-                pd.DataFrame({"date":[],"nav":[]}).to_csv(file_path,index=False)
-
-    # Load CSV
-    if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
-        pd.DataFrame({"date":[],"nav":[]}).to_csv(file_path,index=False)
-    try:
-        df = pd.read_csv(file_path)
-        if "date" not in df.columns or "nav" not in df.columns:
-            df = pd.DataFrame(columns=["date","nav"])
-        else:
-            df["date"] = pd.to_datetime(df["date"])
-    except:
-        df = pd.DataFrame(columns=["date","nav"])
-
-    # คำนวณ MA / Signal
+        try:
+            df_old = pd.read_csv(file_path)
+            if "date" in df_old.columns:
+                df_old["date"] = pd.to_datetime(df_old["date"])
+        except:
+            st.warning(f"❌ อ่าน CSV เก่าของ {fund_name} ล้มเหลว")
+    
+    # ดึงข้อมูลย้อนหลัง
+    df_new = fetch_nav_multi_source(fund_name, months)
+    
+    # รวมข้อมูลใหม่กับข้อมูลเก่า
+    df = pd.concat([df_old, df_new], ignore_index=True)
+    df.drop_duplicates(subset="date", inplace=True)
+    df = df.sort_values("date")
+    
+    # คำนวณ MA5 / MA20 และ Signal
     if not df.empty:
-        df = df.sort_values("date")
         df["MA5"] = df["nav"].rolling(5).mean()
         df["MA20"] = df["nav"].rolling(20).mean()
         df["Signal"] = ""
-        for i in range(1,len(df)):
+        for i in range(1, len(df)):
             if df["MA5"].iloc[i] > df["MA20"].iloc[i] and df["MA5"].iloc[i-1] <= df["MA20"].iloc[i-1]:
-                df.loc[df.index[i],"Signal"]="BUY"
+                df.loc[df.index[i], "Signal"] = "BUY"
             elif df["MA5"].iloc[i] < df["MA20"].iloc[i] and df["MA5"].iloc[i-1] >= df["MA20"].iloc[i-1]:
-                df.loc[df.index[i],"Signal"]="SELL"
-
+                df.loc[df.index[i], "Signal"] = "SELL"
+    
+    # บันทึกข้อมูลลง CSV
+    df.to_csv(file_path, index=False)
     return df
 
 # ----------------------------
 # Streamlit App
 # ----------------------------
-st.title("📈 Fund Dashboard (Multi-Source)")
+st.title("📈 Fund Dashboard (Multi-Source + Historical)")
 
 selected_fund = st.selectbox("เลือกกองทุน", FUND_LIST)
-df = get_fund_data(selected_fund)
+df = get_fund_data(selected_fund, HISTORICAL_MONTHS)
 
-# Latest Signal
+# สัญญาณล่าสุด
 if df.empty or "Signal" not in df.columns:
     latest_signal = "HOLD"
 else:
@@ -137,32 +117,32 @@ else:
 
 st.subheader(f"Latest Signal: {latest_signal}")
 
-# Show DataFrame
+# แสดง DataFrame
 st.subheader("NAV Data")
 if df.empty:
     st.warning("ไม่มีข้อมูลให้แสดง")
 else:
     st.dataframe(df.fillna(""))
 
-# Plot Graph
+# แสดงกราฟ
 if not df.empty and "nav" in df.columns:
     st.subheader("กราฟ NAV + MA")
-    fig, ax = plt.subplots(figsize=(10,5))
+    fig, ax = plt.subplots(figsize=(10, 5))
     ax.plot(df["date"], df["nav"], label="NAV", marker='o')
     if "MA5" in df.columns:
         ax.plot(df["date"], df["MA5"], label="MA5")
     if "MA20" in df.columns:
         ax.plot(df["date"], df["MA20"], label="MA20")
-
-    # Plot BUY/SELL
+    
+    # แสดงจุด BUY/SELL
     if "Signal" in df.columns:
-        buy_points = df[df["Signal"]=="BUY"]
-        sell_points = df[df["Signal"]=="SELL"]
+        buy_points = df[df["Signal"] == "BUY"]
+        sell_points = df[df["Signal"] == "SELL"]
         if not buy_points.empty:
             ax.scatter(buy_points["date"], buy_points["nav"], marker="^", color="green", s=100, label="BUY")
         if not sell_points.empty:
             ax.scatter(sell_points["date"], sell_points["nav"], marker="v", color="red", s=100, label="SELL")
-
+    
     ax.set_xlabel("Date")
     ax.set_ylabel("NAV")
     ax.legend()
