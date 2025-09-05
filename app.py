@@ -47,26 +47,34 @@ def get_fund_data(fund_name):
         if file_date == datetime.today().date():
             fetch_online_flag = False
 
-    # ดึงข้อมูลออนไลน์ถ้าไฟล์เก่า / ไม่มี
+    # ดึงข้อมูลออนไลน์
     if fetch_online_flag:
         df_online = fetch_nav_online(fund_name)
         if df_online is not None and not df_online.empty:
             with st.spinner(f"💾 กำลังบันทึก CSV ของ {fund_name}..."):
                 df_online.to_csv(file_path, index=False)
         else:
+            # สร้าง CSV ตัวอย่างถ้ายังไม่มีไฟล์
             if not os.path.exists(file_path):
-                pd.DataFrame(columns=["date","nav"]).to_csv(file_path, index=False)
+                pd.DataFrame({"date":[], "nav":[]}).to_csv(file_path, index=False)
             st.warning(f"⚠️ ข้อมูล NAV ของ {fund_name} ไม่ถูกบันทึก (ไฟล์ว่าง)")
 
     # โหลด CSV
     if os.path.exists(file_path):
-        df = pd.read_csv(file_path, parse_dates=["date"])
-        if df.empty:
-            st.warning(f"⚠️ ไฟล์ CSV ของ {fund_name} ว่างเปล่า")
-            return df
+        df = pd.read_csv(file_path)
+        # ตรวจสอบคอลัมน์ก่อน parse_dates
+        if "date" in df.columns and not df.empty:
+            df["date"] = pd.to_datetime(df["date"])
+        else:
+            st.warning(f"⚠️ CSV ของ {fund_name} ว่างหรือไม่มีคอลัมน์ date")
+            return pd.DataFrame(columns=["date","nav"])
     else:
         st.warning(f"⚠️ ไม่พบไฟล์ CSV ของ {fund_name}")
         return pd.DataFrame(columns=["date","nav"])
+
+    # ถ้าไม่มีข้อมูลกลับมาจะ return DataFrame ว่าง
+    if df.empty:
+        return df
 
     df = df.sort_values("date")
     df["MA5"] = df["nav"].rolling(5).mean()
@@ -77,6 +85,7 @@ def get_fund_data(fund_name):
             df.loc[df.index[i], "Signal"] = "BUY"
         elif df["MA5"].iloc[i] < df["MA20"].iloc[i] and df["MA5"].iloc[i-1] >= df["MA20"].iloc[i-1]:
             df.loc[df.index[i], "Signal"] = "SELL"
+
     return df
 
 # 🔔 แสดงสัญญาณล่าสุด
