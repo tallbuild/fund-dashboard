@@ -12,18 +12,18 @@ st.title("📊 Fund Dashboard - สัญญาณล่าสุดทุกก
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# รายชื่อกองทุน (ใช้ไฟล์ CSV หรือกำหนดชื่อกองทุนออนไลน์)
+# กำหนดกองทุน
 funds = ["ONE-UGG-RA", "K-GHEALTH", "K-EUROPE-A(D)", "ONE-BTCETFOF"]
 
 def fetch_nav_online(fund_name):
     """
-    ตัวอย่าง fetch online จากเว็บไซต์กองทุน
-    ให้ปรับ URL / parsing ตามเว็บจริงของกองทุน
+    ดึง NAV จริงจากเว็บไซต์ Morningstar / AMC
+    ตัวอย่าง: ต้องปรับ URL และ parsing ตามเว็บจริง
     """
     with st.spinner(f"🔄 กำลังดึงข้อมูล NAV ของ {fund_name}..."):
-        # --- ตัวอย่าง mockup URL ---
-        url = f"https://www.example.com/{fund_name}"
         try:
+            # ตัวอย่าง mock URL
+            url = f"https://www.example.com/{fund_name}"
             r = requests.get(url)
             r.raise_for_status()
             soup = BeautifulSoup(r.text, "html.parser")
@@ -34,7 +34,7 @@ def fetch_nav_online(fund_name):
                 df["date"] = pd.to_datetime(df["date"])
                 return df
         except Exception as e:
-            st.error(f"❌ ไม่สามารถดึง NAV ของ {fund_name} ได้: {e}")
+            st.warning(f"⚠️ ไม่สามารถดึง NAV ของ {fund_name} ได้: {e}")
     return None
 
 def get_fund_data(fund_name):
@@ -47,14 +47,26 @@ def get_fund_data(fund_name):
         if file_date == datetime.today().date():
             fetch_online_flag = False
 
+    # ดึงข้อมูลออนไลน์ถ้าไฟล์เก่า / ไม่มี
     if fetch_online_flag:
         df_online = fetch_nav_online(fund_name)
-        if df_online is not None:
+        if df_online is not None and not df_online.empty:
             with st.spinner(f"💾 กำลังบันทึก CSV ของ {fund_name}..."):
                 df_online.to_csv(file_path, index=False)
+        else:
+            if not os.path.exists(file_path):
+                pd.DataFrame(columns=["date","nav"]).to_csv(file_path, index=False)
+            st.warning(f"⚠️ ข้อมูล NAV ของ {fund_name} ไม่ถูกบันทึก (ไฟล์ว่าง)")
 
-    with st.spinner(f"📂 กำลังโหลด CSV ของ {fund_name}..."):
+    # โหลด CSV
+    if os.path.exists(file_path):
         df = pd.read_csv(file_path, parse_dates=["date"])
+        if df.empty:
+            st.warning(f"⚠️ ไฟล์ CSV ของ {fund_name} ว่างเปล่า")
+            return df
+    else:
+        st.warning(f"⚠️ ไม่พบไฟล์ CSV ของ {fund_name}")
+        return pd.DataFrame(columns=["date","nav"])
 
     df = df.sort_values("date")
     df["MA5"] = df["nav"].rolling(5).mean()
@@ -67,22 +79,25 @@ def get_fund_data(fund_name):
             df.loc[df.index[i], "Signal"] = "SELL"
     return df
 
-# 🔔 สรุปสัญญาณล่าสุดทุกกองทุน
+# 🔔 แสดงสัญญาณล่าสุด
 st.subheader("🔔 สัญญาณล่าสุดของทุกกองทุน")
 for f in funds:
     df = get_fund_data(f)
     latest_signal = df["Signal"].replace("", "HOLD").iloc[-1]
+    color = "#fff59d"  # HOLD
     if latest_signal == "BUY":
-        st.markdown(f"<div style='background-color: #a8e6a1; padding:5px; font-weight:bold;'>{f}: {latest_signal}</div>", unsafe_allow_html=True)
+        color = "#a8e6a1"
     elif latest_signal == "SELL":
-        st.markdown(f"<div style='background-color: #f28b82; padding:5px; font-weight:bold;'>{f}: {latest_signal}</div>", unsafe_allow_html=True)
-    else:
-        st.markdown(f"<div style='background-color: #fff59d; padding:5px; font-weight:bold;'>{f}: {latest_signal}</div>", unsafe_allow_html=True)
+        color = "#f28b82"
+    st.markdown(f"<div style='background-color:{color}; padding:5px; font-weight:bold;'>{f}: {latest_signal}</div>", unsafe_allow_html=True)
 
-# แสดงกราฟ NAV + MA + จุด Buy/Sell ของแต่ละกองทุน
+# 📈 กราฟ NAV + MA + BUY/SELL
 for f in funds:
     st.markdown(f"### 📈 {f}")
     df = get_fund_data(f)
+    if df.empty:
+        st.info("❌ ไม่มีข้อมูลแสดงกราฟ")
+        continue
 
     fig, ax = plt.subplots(figsize=(8,3))
     ax.plot(df["date"], df["nav"], label="NAV", color="blue")
