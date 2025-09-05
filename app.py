@@ -1,78 +1,99 @@
-import streamlit as st
-import pandas as pd
-import matplotlib.pyplot as plt
+# app.py
 import os
+import pandas as pd
+import streamlit as st
+from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
 
-st.set_page_config(layout="wide")
-st.title("📊 Fund Dashboard - สัญญาณล่าสุดทุกกองทุน")
-
+# ----------------------------
+# Config
+# ----------------------------
 DATA_DIR = "data"
-os.makedirs(DATA_DIR, exist_ok=True)
+FUND_LIST = ["K-EUROPE-A(D)", "ONE-UGG-RA", "K-GHEALTH", "TISCOG"]
 
-# กำหนดกองทุน
-funds = ["ONE-UGG-RA", "K-GHEALTH", "K-EUROPE-A(D)", "ONE-BTCETFOF"]
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR)
 
+# ----------------------------
+# Function: fetch NAV online
+# ----------------------------
 def fetch_nav_online(fund_name):
     """
-    ดึง NAV จริงจากเว็บไซต์ Morningstar / AMC
-    ตัวอย่าง: ต้องปรับ URL และ parsing ตามเว็บจริง
+    ดึง NAV จาก Morningstar Thailand (ตัวอย่าง)
     """
-    with st.spinner(f"🔄 กำลังดึงข้อมูล NAV ของ {fund_name}..."):
-        try:
-            # ตัวอย่าง mock URL
-            url = f"https://www.example.com/{fund_name}"
-            r = requests.get(url)
-            r.raise_for_status()
-            soup = BeautifulSoup(r.text, "html.parser")
-            table = soup.find("table")
-            if table:
-                df = pd.read_html(str(table))[0]
-                df.columns = ["date", "nav"]
-                df["date"] = pd.to_datetime(df["date"])
-                return df
-        except Exception as e:
-            st.warning(f"⚠️ ไม่สามารถดึง NAV ของ {fund_name} ได้: {e}")
-    return None
+    st.info(f"🌐 กำลังดึงข้อมูลออนไลน์ของ {fund_name} ...")
+    try:
+        # URL ตัวอย่าง (ปรับตาม fund_name จริง)
+        url = "https://www.morningstarthailand.com/th/funds/snapshot/snapshot.aspx?id=F000000RG5&lang=en-TH"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
 
+        # ดึง NAV ล่าสุด (ตัวอย่าง)
+        nav_value = soup.find("span", {"id": "ctl00_ContentPlaceHolder1_lblNAV"})
+        nav_date = soup.find("span", {"id": "ctl00_ContentPlaceHolder1_lblDate"})
+
+        if nav_value and nav_date:
+            nav = float(nav_value.text.strip())
+            date = pd.to_datetime(nav_date.text.strip(), dayfirst=True)
+            df = pd.DataFrame({"date": [date], "nav": [nav]})
+            return df
+        else:
+            st.warning(f"⚠️ ไม่พบข้อมูล NAV ของ {fund_name}")
+            return pd.DataFrame(columns=["date","nav"])
+
+    except Exception as e:
+        st.error(f"❌ Fetch NAV ของ {fund_name} ล้มเหลว: {e}")
+        return pd.DataFrame(columns=["date","nav"])
+
+# ----------------------------
+# Function: get fund data
+# ----------------------------
 def get_fund_data(fund_name):
     file_path = os.path.join(DATA_DIR, f"{fund_name}.csv")
-    fetch_online_flag = True
 
+    # ----------------------------
+    # Fetch online if file missing or outdated
+    # ----------------------------
+    fetch_online_flag = True
     if os.path.exists(file_path):
         mtime = os.path.getmtime(file_path)
         file_date = datetime.fromtimestamp(mtime).date()
         if file_date == datetime.today().date():
             fetch_online_flag = False
 
-    # ดึงข้อมูลออนไลน์
     if fetch_online_flag:
         df_online = fetch_nav_online(fund_name)
-        if df_online is not None and not df_online.empty:
-            with st.spinner(f"💾 กำลังบันทึก CSV ของ {fund_name}..."):
+        if not df_online.empty:
+            with st.spinner(f"💾 กำลังบันทึก CSV ของ {fund_name} ..."):
                 df_online.to_csv(file_path, index=False)
         else:
-            # สร้าง CSV ตัวอย่างถ้ายังไม่มีไฟล์
+            # สร้าง CSV เปล่าถ้าไม่มี
             if not os.path.exists(file_path):
                 pd.DataFrame({"date":[], "nav":[]}).to_csv(file_path, index=False)
-            st.warning(f"⚠️ ข้อมูล NAV ของ {fund_name} ไม่ถูกบันทึก (ไฟล์ว่าง)")
 
-    # โหลด CSV
-    if os.path.exists(file_path):
+    # ----------------------------
+    # Load CSV
+    # ----------------------------
+    if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+        st.warning(f"⚠️ ไฟล์ CSV ของ {fund_name} ว่างหรือไม่พบไฟล์ สร้างไฟล์เปล่าใหม่")
+        pd.DataFrame({"date":[], "nav":[]}).to_csv(file_path, index=False)
+
+    try:
         df = pd.read_csv(file_path)
-        # ตรวจสอบคอลัมน์ก่อน parse_dates
-        if "date" in df.columns and not df.empty:
-            df["date"] = pd.to_datetime(df["date"])
+        if "date" not in df.columns or "nav" not in df.columns:
+            st.warning(f"⚠️ CSV ของ {fund_name} ไม่มีคอลัมน์ date/nav สร้าง DataFrame เปล่าแทน")
+            df = pd.DataFrame(columns=["date","nav"])
         else:
-            st.warning(f"⚠️ CSV ของ {fund_name} ว่างหรือไม่มีคอลัมน์ date")
-            return pd.DataFrame(columns=["date","nav"])
-    else:
-        st.warning(f"⚠️ ไม่พบไฟล์ CSV ของ {fund_name}")
-        return pd.DataFrame(columns=["date","nav"])
+            df["date"] = pd.to_datetime(df["date"])
+    except Exception as e:
+        st.error(f"❌ อ่านไฟล์ CSV ของ {fund_name} ไม่สำเร็จ: {e}")
+        df = pd.DataFrame(columns=["date","nav"])
 
-    # ถ้าไม่มีข้อมูลกลับมาจะ return DataFrame ว่าง
+    # ----------------------------
+    # คำนวณ MA และ Signal
+    # ----------------------------
     if df.empty:
         return df
 
@@ -88,38 +109,45 @@ def get_fund_data(fund_name):
 
     return df
 
-# 🔔 แสดงสัญญาณล่าสุด
-st.subheader("🔔 สัญญาณล่าสุดของทุกกองทุน")
-for f in funds:
-    df = get_fund_data(f)
+# ----------------------------
+# Streamlit App
+# ----------------------------
+st.title("📈 Fund Dashboard (Thai)")
+
+selected_fund = st.selectbox("เลือกกองทุน", FUND_LIST)
+
+df = get_fund_data(selected_fund)
+
+# Latest Signal
+if df.empty or "Signal" not in df.columns:
+    latest_signal = "HOLD"
+else:
     latest_signal = df["Signal"].replace("", "HOLD").iloc[-1]
-    color = "#fff59d"  # HOLD
-    if latest_signal == "BUY":
-        color = "#a8e6a1"
-    elif latest_signal == "SELL":
-        color = "#f28b82"
-    st.markdown(f"<div style='background-color:{color}; padding:5px; font-weight:bold;'>{f}: {latest_signal}</div>", unsafe_allow_html=True)
 
-# 📈 กราฟ NAV + MA + BUY/SELL
-for f in funds:
-    st.markdown(f"### 📈 {f}")
-    df = get_fund_data(f)
-    if df.empty:
-        st.info("❌ ไม่มีข้อมูลแสดงกราฟ")
-        continue
+st.subheader(f"Latest Signal: {latest_signal}")
 
-    fig, ax = plt.subplots(figsize=(8,3))
-    ax.plot(df["date"], df["nav"], label="NAV", color="blue")
-    ax.plot(df["date"], df["MA5"], label="MA5", color="green")
-    ax.plot(df["date"], df["MA20"], label="MA20", color="red")
+# Show DataFrame
+st.subheader("NAV Data")
+st.dataframe(df)
 
-    buy_signals = df[df["Signal"] == "BUY"]
-    sell_signals = df[df["Signal"] == "SELL"]
-    ax.scatter(buy_signals["date"], buy_signals["nav"], marker="^", color="green", s=80, label="BUY")
-    ax.scatter(sell_signals["date"], sell_signals["nav"], marker="v", color="red", s=80, label="SELL")
+# Plot Graph
+if not df.empty:
+    st.subheader("กราฟ NAV + MA")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(10,5))
+    ax.plot(df["date"], df["nav"], label="NAV", marker='o')
+    ax.plot(df["date"], df["MA5"], label="MA5")
+    ax.plot(df["date"], df["MA20"], label="MA20")
+
+    # Plot BUY/SELL points
+    buy_points = df[df["Signal"]=="BUY"]
+    sell_points = df[df["Signal"]=="SELL"]
+    ax.scatter(buy_points["date"], buy_points["nav"], marker="^", color="green", s=100, label="BUY")
+    ax.scatter(sell_points["date"], sell_points["nav"], marker="v", color="red", s=100, label="SELL")
 
     ax.set_xlabel("Date")
     ax.set_ylabel("NAV")
     ax.legend()
-    plt.xticks(rotation=45)
+    ax.grid(True)
     st.pyplot(fig)
