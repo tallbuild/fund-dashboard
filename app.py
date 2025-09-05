@@ -5,6 +5,7 @@ import streamlit as st
 from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
+import matplotlib.pyplot as plt
 
 # ----------------------------
 # Config
@@ -19,9 +20,6 @@ if not os.path.exists(DATA_DIR):
 # Function: fetch NAV online
 # ----------------------------
 def fetch_nav_online(fund_name):
-    """
-    ดึง NAV จาก Morningstar Thailand (ตัวอย่าง)
-    """
     st.info(f"🌐 กำลังดึงข้อมูลออนไลน์ของ {fund_name} ...")
     try:
         # URL ตัวอย่าง (ปรับตาม fund_name จริง)
@@ -53,9 +51,7 @@ def fetch_nav_online(fund_name):
 def get_fund_data(fund_name):
     file_path = os.path.join(DATA_DIR, f"{fund_name}.csv")
 
-    # ----------------------------
-    # Fetch online if file missing or outdated
-    # ----------------------------
+    # Fetch online ถ้าไฟล์ missing / outdated
     fetch_online_flag = True
     if os.path.exists(file_path):
         mtime = os.path.getmtime(file_path)
@@ -69,13 +65,10 @@ def get_fund_data(fund_name):
             with st.spinner(f"💾 กำลังบันทึก CSV ของ {fund_name} ..."):
                 df_online.to_csv(file_path, index=False)
         else:
-            # สร้าง CSV เปล่าถ้าไม่มี
             if not os.path.exists(file_path):
                 pd.DataFrame({"date":[], "nav":[]}).to_csv(file_path, index=False)
 
-    # ----------------------------
     # Load CSV
-    # ----------------------------
     if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
         st.warning(f"⚠️ ไฟล์ CSV ของ {fund_name} ว่างหรือไม่พบไฟล์ สร้างไฟล์เปล่าใหม่")
         pd.DataFrame({"date":[], "nav":[]}).to_csv(file_path, index=False)
@@ -91,21 +84,17 @@ def get_fund_data(fund_name):
         st.error(f"❌ อ่านไฟล์ CSV ของ {fund_name} ไม่สำเร็จ: {e}")
         df = pd.DataFrame(columns=["date","nav"])
 
-    # ----------------------------
     # คำนวณ MA และ Signal
-    # ----------------------------
-    if df.empty:
-        return df
-
-    df = df.sort_values("date")
-    df["MA5"] = df["nav"].rolling(5).mean()
-    df["MA20"] = df["nav"].rolling(20).mean()
-    df["Signal"] = ""
-    for i in range(1, len(df)):
-        if df["MA5"].iloc[i] > df["MA20"].iloc[i] and df["MA5"].iloc[i-1] <= df["MA20"].iloc[i-1]:
-            df.loc[df.index[i], "Signal"] = "BUY"
-        elif df["MA5"].iloc[i] < df["MA20"].iloc[i] and df["MA5"].iloc[i-1] >= df["MA20"].iloc[i-1]:
-            df.loc[df.index[i], "Signal"] = "SELL"
+    if not df.empty:
+        df = df.sort_values("date")
+        df["MA5"] = df["nav"].rolling(5).mean()
+        df["MA20"] = df["nav"].rolling(20).mean()
+        df["Signal"] = ""
+        for i in range(1, len(df)):
+            if df["MA5"].iloc[i] > df["MA20"].iloc[i] and df["MA5"].iloc[i-1] <= df["MA20"].iloc[i-1]:
+                df.loc[df.index[i], "Signal"] = "BUY"
+            elif df["MA5"].iloc[i] < df["MA20"].iloc[i] and df["MA5"].iloc[i-1] >= df["MA20"].iloc[i-1]:
+                df.loc[df.index[i], "Signal"] = "SELL"
 
     return df
 
@@ -128,23 +117,29 @@ st.subheader(f"Latest Signal: {latest_signal}")
 
 # Show DataFrame
 st.subheader("NAV Data")
-st.dataframe(df)
+if df.empty:
+    st.warning("ไม่มีข้อมูลให้แสดง")
+else:
+    st.dataframe(df.fillna(""))
 
 # Plot Graph
-if not df.empty:
+if not df.empty and "nav" in df.columns:
     st.subheader("กราฟ NAV + MA")
-    import matplotlib.pyplot as plt
-
     fig, ax = plt.subplots(figsize=(10,5))
     ax.plot(df["date"], df["nav"], label="NAV", marker='o')
-    ax.plot(df["date"], df["MA5"], label="MA5")
-    ax.plot(df["date"], df["MA20"], label="MA20")
+    if "MA5" in df.columns:
+        ax.plot(df["date"], df["MA5"], label="MA5")
+    if "MA20" in df.columns:
+        ax.plot(df["date"], df["MA20"], label="MA20")
 
     # Plot BUY/SELL points
-    buy_points = df[df["Signal"]=="BUY"]
-    sell_points = df[df["Signal"]=="SELL"]
-    ax.scatter(buy_points["date"], buy_points["nav"], marker="^", color="green", s=100, label="BUY")
-    ax.scatter(sell_points["date"], sell_points["nav"], marker="v", color="red", s=100, label="SELL")
+    if "Signal" in df.columns:
+        buy_points = df[df["Signal"]=="BUY"]
+        sell_points = df[df["Signal"]=="SELL"]
+        if not buy_points.empty:
+            ax.scatter(buy_points["date"], buy_points["nav"], marker="^", color="green", s=100, label="BUY")
+        if not sell_points.empty:
+            ax.scatter(sell_points["date"], sell_points["nav"], marker="v", color="red", s=100, label="SELL")
 
     ax.set_xlabel("Date")
     ax.set_ylabel("NAV")
